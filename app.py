@@ -1,97 +1,70 @@
 import os
 import logging
-import threading
-import asyncio
-import requests
-from flask import Flask
+from flask import Flask, request
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
+import requests
 
-# Настройка логирования
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Переменные окружения
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    raise ValueError("Переменная окружения TELEGRAM_TOKEN не задана!")
+    raise ValueError("TELEGRAM_TOKEN not set")
 
-# Flask приложение для health check
-flask_app = Flask(__name__)
+app = Flask(__name__)
 
-@flask_app.route('/')
-def health_check():
-    return "Бот работает!", 200
+# Глобальный объект Application (инициализируем позже)
+bot_app = None
 
-# -------- Логика Telegram-бота ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
-    welcome_text = (
-        "Привет! Я бот, который отправляет случайные мемы.\n"
-        "Просто отправь команду /meme и получи порцию юмора!"
-    )
-    await update.message.reply_text(welcome_text)
+    await update.message.reply_text("Привет! Отправь /meme для мема.")
 
 async def meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет случайный мем из публичного API"""
-    api_url = "https://meme-api.com/gimme"
     try:
-        # Таймаут 10 секунд
-        response = requests.get(api_url, timeout=10)
-        response.raise_for_status()  # выбросит исключение при HTTP ошибке
-        data = response.json()
-
-        # Извлекаем данные
-        image_url = data.get('url')
-        title = data.get('title', 'Без названия')
-        author = data.get('author', 'Неизвестный автор')
+        resp = requests.get("https://meme-api.com/gimme", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        url = data.get('url')
+        title = data.get('title', 'Мем')
+        author = data.get('author', '')
         caption = f"{title}\nАвтор: {author}"
-
-        if not image_url:
-            raise ValueError("В ответе API отсутствует URL изображения")
-
-        # Отправляем фото
-        await update.message.reply_photo(photo=image_url, caption=caption)
-
-    except requests.exceptions.Timeout:
-        logger.error("Таймаут при запросе к API")
-        await update.message.reply_text("Сервер мемов не отвечает. Попробуйте позже.")
-    except requests.exceptions.ConnectionError:
-        logger.error("Ошибка соединения с API")
-        await update.message.reply_text("Не удаётся подключиться к серверу мемов. Проверьте интернет.")
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"HTTP ошибка: {e.response.status_code}")
-        await update.message.reply_text(f"Сервер мемов вернул ошибку {e.response.status_code}. Попробуйте позже.")
+        if url:
+            await update.message.reply_photo(photo=url, caption=caption)
+        else:
+            await update.message.reply_text("Не удалось получить картинку.")
     except Exception as e:
-        logger.exception("Непредвиденная ошибка при получении мема")
-        await update.message.reply_text("Произошла ошибка. Попробуйте ещё раз.")
+        logger.exception("Ошибка в /meme")
+        await update.message.reply_text("Ошибка при загрузке мема. Попробуйте позже.")
 
-def setup_bot() -> Application:
-    """Создаёт и настраивает экземпляр Application для бота"""
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("meme", meme))
-    return app
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    if not bot_app:
+        return "Bot not ready", 500
+    try:
+        update = Update.de_json(request.get_json(force=True), bot_app.bot)
+        await bot_app.process_update(update)
+        return "OK", 200
+    except Exception as e:
+        logger.exception("Webhook error")
+        return "Error", 500
 
-def run_bot_polling():
-    """Запускает polling бота в отдельном асинхронном цикле"""
-    bot_app = setup_bot()
-    # Создаём новый event loop для этого потока
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    # Запускаем polling (блокирует поток)
-    loop.run_until_complete(bot_app.run_polling())
+@app.route('/')
+def index():
+    return "Bot is running"
 
-# -------- Точка входа ----------
+def setup_bot():
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("meme", meme))
+    return application
+
 if __name__ == '__main__':
-    # Запускаем Telegram-бота в фоновом потоке
-    bot_thread = threading.Thread(target=run_bot_polling, daemon=True)
-    bot_thread.start()
-    logger.info("Telegram бот запущен в фоновом потоке")
-
-    # Запускаем Flask (основной поток) для health check
+    bot_app = setup_bot()
+    # Устанавливаем вебхук
     port = int(os.environ.get('PORT', 5000))
-    flask_app.run(host='0.0.0.0', port=port)
+    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/webhook"
+    # В Render имя хоста автоматически подставляется в переменную RENDER_EXTERNAL_HOSTNAME
+    # Если её нет, используем домен, который вы видите в URL сервиса
+    # Можно задать вручную: webhook_url = "https://ваш-сервис.onrender.com/webhook"
+    bot_app.run_webhook(listen="0.0.0.0", port=port, url_path="/webhook", webhook_url=webhook_url)
