@@ -24,7 +24,8 @@ CATEGORIES = {
     "😂 Dad Jokes": "dadjokes",
     "🔞 18+": "GoneWild",        # сабреддит с NSFW-мемами (проверьте, работает ли)
     "💻 IT Jokes": "programmerhumor",
-    "🎮 Gaming Jokes": "gamingmemes"
+    "🎮 Gaming Jokes": "gamingmemes",
+    "GIF": "NSFW_GIF"
 }
 
 # Обратные названия для отображения
