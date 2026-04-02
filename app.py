@@ -22,7 +22,7 @@ settings_lock = Lock()
 CATEGORIES = {
     "🎭 Любой": "random",           # любой случайный мем
     "😂 Dad Jokes": "dadjokes",
-    "🔞 18+": "nsfw_memes",        # сабреддит с NSFW-мемами (проверьте, работает ли)
+    "🔞 18+": "GoneWild",        # сабреддит с NSFW-мемами (проверьте, работает ли)
     "💻 IT Jokes": "programmerhumor",
     "🎮 Gaming Jokes": "gamingmemes"
 }
