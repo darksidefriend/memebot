@@ -25,7 +25,7 @@ CATEGORIES = {
     "🔞 18+": "GoneWild",        # сабреддит с NSFW-мемами (проверьте, работает ли)
     "💻 IT Jokes": "programmerhumor",
     "🎮 Gaming Jokes": "gamingmemes",
-    "GIF": "NSFW_GIF"
+    "GIF": "JizzedToThis"
 }
 
 # Обратные названия для отображения
