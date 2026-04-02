@@ -1,70 +1,83 @@
 import os
 import logging
-from flask import Flask, request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
 import requests
+from flask import Flask, request
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 if not TOKEN:
-    raise ValueError("TELEGRAM_TOKEN not set")
+    raise ValueError("TELEGRAM_TOKEN не задан!")
 
 app = Flask(__name__)
 
-# Глобальный объект Application (инициализируем позже)
-bot_app = None
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Отправь /meme для мема.")
-
-async def meme(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def send_message(chat_id, text):
+    """Отправляет текстовое сообщение"""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     try:
-        resp = requests.get("https://meme-api.com/gimme", timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-        url = data.get('url')
-        title = data.get('title', 'Мем')
-        author = data.get('author', '')
-        caption = f"{title}\nАвтор: {author}"
-        if url:
-            await update.message.reply_photo(photo=url, caption=caption)
-        else:
-            await update.message.reply_text("Не удалось получить картинку.")
+        requests.post(url, json={'chat_id': chat_id, 'text': text}, timeout=10)
     except Exception as e:
-        logger.exception("Ошибка в /meme")
-        await update.message.reply_text("Ошибка при загрузке мема. Попробуйте позже.")
+        logger.error(f"Ошибка send_message: {e}")
+
+def send_photo(chat_id, photo_url, caption):
+    """Отправляет фото"""
+    url = f"https://api.telegram.org/bot{TOKEN}/sendPhoto"
+    try:
+        requests.post(url, json={'chat_id': chat_id, 'photo': photo_url, 'caption': caption}, timeout=10)
+    except Exception as e:
+        logger.error(f"Ошибка send_photo: {e}")
 
 @app.route('/webhook', methods=['POST'])
-async def webhook():
-    if not bot_app:
-        return "Bot not ready", 500
-    try:
-        update = Update.de_json(request.get_json(force=True), bot_app.bot)
-        await bot_app.process_update(update)
-        return "OK", 200
-    except Exception as e:
-        logger.exception("Webhook error")
-        return "Error", 500
+def webhook():
+    """Обрабатывает входящие обновления от Telegram"""
+    data = request.get_json()
+    if not data or 'message' not in data:
+        return 'OK', 200
+
+    message = data['message']
+    chat_id = message['chat']['id']
+    text = message.get('text', '')
+
+    if text == '/start':
+        send_message(chat_id, "Привет! Я бот с мемами.\nОтправь /meme – получу случайный мем из интернета.")
+    elif text == '/meme':
+        try:
+            # Запрос к API мемов
+            resp = requests.get("https://meme-api.com/gimme", timeout=10)
+            resp.raise_for_status()
+            meme = resp.json()
+            title = meme.get('title', 'Мем')
+            author = meme.get('author', 'Неизвестный автор')
+            caption = f"{title}\nАвтор: {author}"
+            send_photo(chat_id, meme['url'], caption)
+        except requests.exceptions.Timeout:
+            send_message(chat_id, "Сервер мемов не отвечает. Попробуйте позже.")
+        except Exception as e:
+            logger.exception("Ошибка при получении мема")
+            send_message(chat_id, "Не удалось получить мем. Попробуйте ещё раз.")
+    else:
+        send_message(chat_id, "Используйте /start или /meme")
+
+    return 'OK', 200
 
 @app.route('/')
 def index():
-    return "Bot is running"
-
-def setup_bot():
-    application = Application.builder().token(TOKEN).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("meme", meme))
-    return application
+    return "Бот работает", 200
 
 if __name__ == '__main__':
-    bot_app = setup_bot()
-    # Устанавливаем вебхук
+    # Устанавливаем вебхук при старте
+    hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME')
+    if not hostname:
+        logger.error("RENDER_EXTERNAL_HOSTNAME не задан! Вебхук не установится.")
+    else:
+        webhook_url = f"https://{hostname}/webhook"
+        set_url = f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}"
+        try:
+            response = requests.get(set_url, timeout=10)
+            logger.info(f"Установка вебхука: {response.json()}")
+        except Exception as e:
+            logger.error(f"Не удалось установить вебхук: {e}")
+
     port = int(os.environ.get('PORT', 5000))
-    webhook_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')}/webhook"
-    # В Render имя хоста автоматически подставляется в переменную RENDER_EXTERNAL_HOSTNAME
-    # Если её нет, используем домен, который вы видите в URL сервиса
-    # Можно задать вручную: webhook_url = "https://ваш-сервис.onrender.com/webhook"
-    bot_app.run_webhook(listen="0.0.0.0", port=port, url_path="/webhook", webhook_url=webhook_url)
+    app.run(host='0.0.0.0', port=port)
